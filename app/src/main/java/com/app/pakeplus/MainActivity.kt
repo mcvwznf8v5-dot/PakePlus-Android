@@ -244,6 +244,7 @@ class MainActivity : AppCompatActivity() {
             allowUniversalAccessFromFileURLs = true
             loadWithOverviewMode = true
             mediaPlaybackRequiresUserGesture = false
+             webView.addJavascriptInterface(ComicIntent.Bridge, "PPOpen")
             // setSupportMultipleWindows(true)
         }
         webView
@@ -324,6 +325,7 @@ class MainActivity : AppCompatActivity() {
 
         // load webUrl or file:///android_asset/index.html
         webView.loadUrl(webUrl)
+                ComicIntent.handle(this, webView, intent, savedInstanceState == null)
 
 //        binding = ActivityMainBinding.inflate(layoutInflater)
 //        setContentView(R.layout.single_main)
@@ -352,7 +354,12 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    override fun onPause() {
+        override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        ComicIntent.handle(this, webView, intent, true)
+    }
+override fun onPause() {
         super.onPause()
         webView.onPause()
         // 如果正在全屏播放视频，暂停播放
