@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>漫画书架</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: #101014; color: #e8e8ea;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+  }
+  .view { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .hidden { display: none !important; }
+
+  /* ---------- 书架 ---------- */
+  .topbar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+    padding: 14px 14px 10px; padding-top: calc(14px + env(safe-area-inset-top));
+  }
+  .topbar h1 { font-size: 17px; font-weight: 600; }
+  .topbar .sub { font-size: 12px; color: #8a8a92; margin-left: 2px; }
+  .topbar .spacer { flex: 1; }
+  .btn {
+    background: #23232b; color: #e8e8ea; border: 0; border-radius: 9px;
+    padding: 9px 13px; font-size: 13px; line-height: 1;
+  }
+  .btn:active { background: #2f2f3a; }
+  .btn.primary { background: #3b6ef0; }
+  .btn.primary:active { background: #2f5cd0; }
+  select.btn { padding: 9px 6px; }
+
+  #grid {
+    flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    gap: 12px; padding: 8px 14px 28px; align-content: start;
+  }
+  .card { position: relative; }
+  .cover-box {
+    position: relative; width: 100%; aspect-ratio: 3 / 4; border-radius: 8px;
+    background: #1c1c24; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.4);
+  }
+  .cover-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cover-box .ph {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #4a4a55; font-size: 26px;
+  }
+  .prog {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.5);
+  }
+  .prog i { display: block; height: 100%; background: #3b6ef0; width: 0; }
+  .card .t {
+    font-size: 12px; line-height: 1.35; margin-top: 6px; color: #d7d7db;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .card .m { font-size: 10.5px; color: #75757f; margin-top: 2px; }
+  .empty {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; color: #6a6a75; font-size: 13px; text-align: center; padding: 30px;
+  }
+  .empty b { font-size: 40px; }
+
+  /* ---------- 阅读器 ---------- */
+  .rhead {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+    padding: 10px 10px; padding-top: calc(10px + env(safe-area-inset-top));
+    background: #15151a;
+  }
+  .rhead .title {
+    flex: 1; font-size: 13px; color: #c9c9d0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rhead .info { font-size: 12px; color: #8a8a92; }
+  #stage {
+    flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: #000;
+  }
+  #stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .rfoot {
+    flex: 0 0 auto; padding: 8px 12px; padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    background: #15151a; display: flex; align-items: center; gap: 10px;
+  }
+  .rfoot input[type=range] { flex: 1; height: 22px; accent-color: #3b6ef0; }
+  .jump { display: flex; align-items: center; gap: 6px; }
+  .jump input {
+    width: 54px; background: #23232b; border: 0; color: #e8e8ea;
+    border-radius: 7px; padding: 7px 6px; font-size: 12px; text-align: center;
+  }
+
+  /* ---------- 遮罩 ---------- */
+  .mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.72);
+    display: flex; align-items: center; justify-content: center; z-index: 50;
+  }
+  .panel {
+    background: #1b1b22; border-radius: 14px; padding: 20px; width: 78%; max-width: 320px;
+    text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  }
+  .panel h3 { font-size: 15px; margin-bottom: 8px; }
+  .panel p { font-size: 12.5px; color: #9a9aa4; line-height: 1.6; }
+  .panel .pbar { height: 6px; background: #2b2b34; border-radius: 3px; overflow: hidden; margin: 14px 0 8px; }
+  .panel .pbar i { display: block; height: 100%; width: 0; background: #3b6ef0; transition: width .2s; }
+  .panel .row { display: flex; gap: 10px; margin-top: 14px; }
+  .panel .row .btn { flex: 1; text-align: center; }
+  .toast {
+    position: fixed; left: 50%; bottom: 70px; transform: translateX(-50%);
+    background: rgba(40,40,48,.95); color: #e8e8ea; font-size: 12.5px;
+    padding: 9px 14px; border-radius: 20px; z-index: 60; opacity: 0; transition: opacity .2s;
+    pointer-events: none; max-width: 80%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- ============ 书架 ============ -->
+<div id="shelfView" class="view">
+  <div class="topbar">
+    <h1>📚 书架</h1><span class="sub" id="shelfSub"></span>
+    <span class="spacer"></span>
+    <select class="btn" id="sortSel">
+      <option value="time">按时间</option>
+      <option value="name">按名称</option>
+    </select>
+    <button class="btn primary" id="importBtn">导入</button>
+  </div>
+  <div id="grid"></div>
+  <div class="empty" id="emptyBox">
+    <b>📂</b>
+    <div id="emptyText">书架还是空的<br />点右上角「导入」选压缩包</div>
+  </div>
+</div>
+
+<!-- ============ 阅读器 ============ -->
+<div id="readerView" class="view hidden">
+  <div class="rhead">
+    <button class="btn" id="backBtn">← 书架</button>
+    <div class="title" id="rTitle"></div>
+    <div class="info" id="rInfo"></div>
+  </div>
+  <div id="stage"><img id="pageImg" alt="" /></div>
+  <div class="rfoot">
+    <button class="btn" id="prevBtn">上一页</button>
+    <input type="range" id="slider" min="0" max="0" value="0" />
+    <div class="jump">
+      <input type="number" id="jumpInput" min="1" />
+      <button class="btn" id="jumpBtn">跳</button>
+    </div>
+    <button class="btn" id="nextBtn">下一页</button>
+  </div>
+</div>
+
+<!-- ============ 遮罩层 ============ -->
+<div class="mask hidden" id="importMask">
+  <div class="panel">
+    <h3>正在导入</h3>
+    <p id="impName">准备中…</p>
+    <div class="pbar"><i id="impBar"></i></div>
+    <p style="font-size:11.5px;color:#6f6f7a">大文件需要几分钟，请勿退出</p>
+  </div>
+</div>
+
+<div class="mask hidden" id="confirmMask">
+  <div class="panel">
+    <h3 id="cfTitle">删除这本书？</h3>
+    <p id="cfText">会同时删掉 App 里存的压缩包，无法恢复。</p>
+    <div class="row">
+      <button class="btn" id="cfNo">取消</button>
+      <button class="btn primary" id="cfYes">删除</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==================================================================
+ * 书架 + 阅读器。所有存储/解压都在原生（window.ComicLib），
+ * 网页只负责画界面，因此不受 WebView 内存限制，几 G 的包也能读。
+ * ================================================================== */
+const Lib = window.ComicLib;
+const hasLib = !!(Lib && typeof Lib.listBooks === 'function');
+
+const shelfView = document.getElementById('shelfView');
+const readerView = document.getElementById('readerView');
+const grid = document.getElementById('grid');
+const shelfSub = document.getElementById('shelfSub');
+const emptyBox = document.getElementById('emptyBox');
+const emptyText = document.getElementById('emptyText');
+const sortSel = document.getElementById('sortSel');
+const importBtn = document.getElementById('importBtn');
+
+const rTitle = document.getElementById('rTitle');
+const rInfo = document.getElementById('rInfo');
+const pageImg = document.getElementById('pageImg');
+const slider = document.getElementById('slider');
+const jumpInput = document.getElementById('jumpInput');
+const backBtn = document.getElementById('backBtn');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const jumpBtn = document.getElementById('jumpBtn');
+
+const importMask = document.getElementById('importMask');
+const impName = document.getElementById('impName');
+const impBar = document.getElementById('impBar');
+const confirmMask = document.getElementById('confirmMask');
+const cfText = document.getElementById('cfText');
+const cfYes = document.getElementById('cfYes');
+const cfNo = document.getElementById('cfNo');
+const toastEl = document.getElementById('toast');
+
+let books = [];
+let sortMode = 'time';
+let importing = false;
+let pollTimer = 0;
+let pendingDelete = null;
+
+/* ---------- 小工具 ---------- */
+let toastTimer = 0;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '0M';
+  const mb = bytes / 1048576;
+  return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G' : Math.round(mb) + 'M';
+}
+
+/* ---------- 书架 ---------- */
+function refresh() {
+  if (!hasLib) return;
+  let data;
+  try {
+    data = JSON.parse(Lib.listBooks());
+  } catch (e) {
+    console.warn('listBooks failed', e);
+    return;
+  }
+  books = data.books || [];
+  importing = !!data.importing;
+
+  if (importing) {
+    importMask.classList.remove('hidden');
+    impName.textContent = data.importTitle || '正在读取…';
+    impBar.style.width = (data.importPercent || 0) + '%';
+    startPolling();
+  } else {
+    importMask.classList.add('hidden');
+    stopPolling();
+  }
+
+  renderShelf();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(refresh, 400);
+}
+
+function stopPolling() {
+  if (!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer = 0;
+}
+
+function sortedBooks() {
+  const arr = books.slice();
+  if (sortMode === 'name') {
+    arr.sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), 'zh'));
+  } else {
+    arr.sort((a, b) => (b.importedAt || 0) - (a.importedAt || 0));
+  }
+  return arr;
+}
+
+const coverCache = new Map();
+
+function renderShelf() {
+  const list = sortedBooks();
+  shelfSub.textContent = list.length ? list.length + ' 本' : '';
+  grid.innerHTML = '';
+
+  if (!list.length) {
+    emptyBox.classList.remove('hidden');
+    emptyText.innerHTML = hasLib
+      ? '书架还是空的<br />点右上角「导入」选压缩包'
+      : '请在 App 内打开<br />（浏览器里没有原生存储）';
+    return;
+  }
+  emptyBox.classList.add('hidden');
+
+  for (const book of list) {
+    grid.appendChild(buildCard(book));
+  }
+}
+
+function buildCard(book) {
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  const box = document.createElement('div');
+  box.className = 'cover-box';
+
+  const ph = document.createElement('div');
+  ph.className = 'ph';
+  ph.textContent = '📕';
+  box.appendChild(ph);
+
+  const img = document.createElement('img');
+  img.dataset.id = book.id;
+  img.alt = '';
+  img.loading = 'lazy';
+  box.appendChild(img);
+
+  const prog = document.createElement('div');
+  prog.className = 'prog';
+  const bar = document.createElement('i');
+  const pages = Math.max(1, book.pages || 1);
+  const read = Math.min(book.lastRead || 0, pages - 1);
+  bar.style.width = (((read + (read > 0 ? 1 : 0)) / pages) * 100) + '%';
+  prog.appendChild(bar);
+  box.appendChild(prog);
+
+  const title = document.createElement('div');
+  title.className = 't';
+  title.textContent = book.title || '未命名';
+
+  const meta = document.createElement('div');
+  meta.className = 'm';
+  meta.textContent = (book.pages || 0) + ' 页 · ' + fmtSize(book.size);
+
+  card.appendChild(box);
+  card.appendChild(title);
+  card.appendChild(meta);
+
+  // 封面懒加载
+  if (observer) observer.observe(img);
+
+  // 点击打开
+  let pressTimer = 0;
+  let moved = false;
+  let longPressed = false;
+  box.addEventListener('pointerdown', () => {
+    moved = false;
+    longPressed = false;
+    pressTimer = setTimeout(() => {
+      longPressed = true;
+      askDelete(book);
+    }, 650);
+  });
+  box.addEventListener('pointermove', () => { moved = true; clearTimeout(pressTimer); });
+  box.addEventListener('pointerup', () => clearTimeout(pressTimer));
+  box.addEventListener('pointercancel', () => clearTimeout(pressTimer));
+  box.addEventListener('click', () => {
+    clearTimeout(pressTimer);
+    if (moved || longPressed) { longPressed = false; return; }
+    openBook(book, book.lastRead || 0);
+  });
+
+  return card;
+}
+
+const observer = ('IntersectionObserver' in window) ? new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const img = entry.target;
+    if (img.src) continue;
+    const id = img.dataset.id;
+    let url = coverCache.get(id);
+    if (url === undefined) {
+      try { url = Lib.getCover(id) || ''; } catch (e) { url = ''; }
+      coverCache.set(id, url);
+    }
+    if (url) img.src = url;
+    observer.unobserve(img);
+  }
+}, { root: grid, rootMargin: '240px' }) : null;
+
+/* ---------- 删除 ---------- */
+function askDelete(book) {
+  pendingDelete = book;
+  cfText.textContent = '《' + (book.title || '未命名') + '》会连同 App 里存的压缩包一起删除，无法恢复。';
+  confirmMask.classList.remove('hidden');
+}
+
+cfNo.addEventListener('click', () => {
+  pendingDelete = null;
+  confirmMask.classList.add('hidden');
+});
+
+cfYes.addEventListener('click', () => {
+  const book = pendingDelete;
+  pendingDelete = null;
+  confirmMask.classList.add('hidden');
+  if (!book) return;
+  if (hasLib) Lib.deleteBook(book.id);
+  coverCache.delete(book.id);
+  toast('已删除');
+  setTimeout(refresh, 300);
+});
+
+/* ---------- 阅读器 ---------- */
+let currentBook = null;
+let currentPage = 0;
+let pageCache = new Map();
+let saveTimer = 0;
+let readerOpen = false;
+
+function openBook(book, startPage) {
+  if (!hasLib) { toast('请在 App 内打开'); return; }
+  const pages = Lib.pageCount(book.id);
+  if (!pages) { toast('这本书的文件读不到了'); return; }
+
+  currentBook = Object.assign({}, book, { pages: pages });
+  currentPage = Math.max(0, Math.min(startPage || 0, pages - 1));
+  pageCache = new Map();
+
+  rTitle.textContent = currentBook.title || '未命名';
+  slider.min = '0';
+  slider.max = String(pages - 1);
+  jumpInput.value = String(currentPage + 1);
+
+  shelfView.classList.add('hidden');
+  readerView.classList.remove('hidden');
+  readerOpen = true;
+  try { history.pushState({ reader: 1 }, ''); } catch (e) {}
+
+  showPage(currentPage, true);
+}
+
+function closeReader(fromPop) {
+  if (!readerOpen) return;
+  flushProgress();
+  readerOpen = false;
+  readerView.classList.add('hidden');
+  shelfView.classList.remove('hidden');
+  pageImg.removeAttribute('src');
+  pageCache = new Map();
+  currentBook = null;
+  if (!fromPop) {
+    try {
+      if (history.state && history.state.reader) history.back();
+    } catch (e) {}
+  }
+  refresh();
+}
+
+window.addEventListener('popstate', () => {
+  if (readerOpen) closeReader(true);
+});
+
+function pageUrl(index) {
+  if (!currentBook) return '';
+  const key = currentBook.id + ':' + index;
+  if (pageCache.has(key)) return pageCache.get(key);
+  let url = '';
+  try { url = Lib.getPage(currentBook.id, index) || ''; } catch (e) { url = ''; }
+  if (url) {
+    pageCache.set(key, url);
+    if (pageCache.size > 5) {
+      const firstKey = pageCache.keys().next().value;
+      pageCache.delete(firstKey);
+    }
+  }
+  return url;
+}
+
+function showPage(index, immediate) {
+  if (!currentBook) return;
+  const pages = currentBook.pages || 0;
+  if (index < 0 || index >= pages) return;
+  currentPage = index;
+
+  const url = pageUrl(index);
+  if (url) {
+    if (immediate) pageImg.removeAttribute('src');
+    pageImg.src = url;
+  } else {
+    toast('这一页读取失败');
+  }
+
+  rInfo.textContent = (index + 1) + ' / ' + pages;
+  slider.value = String(index);
+  jumpInput.value = String(index + 1);
+  scheduleSave();
+  preloadNeighbours(index);
+}
+
+function preloadNeighbours(index) {
+  clearTimeout(window.__preloadTimer);
+  window.__preloadTimer = setTimeout(() => {
+    if (currentBook) pageUrl(index + 1);
+  }, 250);
+}
+
+function scheduleSave() {
+  if (!currentBook) return;
+  clearTimeout(saveTimer);
+  const id = currentBook.id;
+  const page = currentPage;
+  saveTimer = setTimeout(() => {
+    if (hasLib) Lib.setProgress(id, page);
+  }, 500);
+}
+
+function flushProgress() {
+  clearTimeout(saveTimer);
+  if (currentBook && hasLib) Lib.setProgress(currentBook.id, currentPage);
+}
+
+backBtn.addEventListener('click', () => closeReader(false));
+prevBtn.addEventListener('click', () => showPage(currentPage - 1));
+nextBtn.addEventListener('click', () => showPage(currentPage + 1));
+
+slider.addEventListener('input', () => {
+  const target = parseInt(slider.value, 10);
+  if (!isNaN(target)) showPage(target);
+});
+
+jumpBtn.addEventListener('click', () => {
+  const n = parseInt(jumpInput.value, 10);
+  if (!isNaN(n)) showPage(n - 1);
+});
+jumpInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') jumpBtn.click(); });
+
+// 左右滑动翻页
+let touchStartX = 0;
+let touchStartY = 0;
+document.getElementById('stage').addEventListener('touchstart', (e) => {
+  touchStartX = e.changedTouches[0].screenX;
+  touchStartY = e.changedTouches[0].screenY;
+}, { passive: true });
+
+document.getElementById('stage').addEventListener('touchend', (e) => {
+  const dx = e.changedTouches[0].screenX - touchStartX;
+  const dy = e.changedTouches[0].screenY - touchStartY;
+  if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy)) return;
+  if (dx > 0) showPage(currentPage - 1);
+  else showPage(currentPage + 1);
+}, { passive: true });
+
+// 键盘（桌面调试用）
+document.addEventListener('keydown', (e) => {
+  if (!readerOpen) return;
+  if (e.key === 'ArrowLeft') showPage(currentPage - 1);
+  if (e.key === 'ArrowRight') showPage(currentPage + 1);
+});
+
+/* ---------- 导入 ---------- */
+importBtn.addEventListener('click', () => {
+  if (!hasLib) { toast('请在 App 内打开'); return; }
+  Lib.pickAndImport();
+});
+
+sortSel.addEventListener('change', () => {
+  sortMode = sortSel.value;
+  renderShelf();
+});
+
+/* ---------- 原生回调 ---------- */
+window.__comicLibChanged = function () { refresh(); };
+
+window.__comicLibImportDone = function (ids) {
+  refresh();
+  if (ids && ids.length) {
+    const first = books.filter((b) => b.id === ids[0])[0];
+    if (first) setTimeout(() => openBook(first, 0), 250);
+  }
+};
+
+/* ---------- 启动 ---------- */
+refresh();
+if (!hasLib) {
+  importsDisable();
+}
+function importsDisable() {
+  importBtn.style.opacity = '0.5';
+}
+</script>
+</body>
+</html>
