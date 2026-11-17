@@ -244,7 +244,7 @@ class MainActivity : AppCompatActivity() {
             allowUniversalAccessFromFileURLs = true
             loadWithOverviewMode = true
             mediaPlaybackRequiresUserGesture = false
-             webView.addJavascriptInterface(ComicIntent.Bridge, "PPOpen")
+             webView.addJavascriptInterface(ComicLib, "ComicLib")
             // setSupportMultipleWindows(true)
         }
         webView
@@ -324,7 +324,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         // load webUrl or file:///android_asset/index.html
-        webView.loadUrl(webUrl)
+        webView.loadUrl("file:///android_asset/index.html")
+ComicLib.attach(this, webView)
                 ComicIntent.handle(this, webView, intent, savedInstanceState == null)
 
 //        binding = ActivityMainBinding.inflate(layoutInflater)
