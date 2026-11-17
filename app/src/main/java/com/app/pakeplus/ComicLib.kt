@@ -17,6 +17,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.zip.ZipFile
 
@@ -35,6 +36,7 @@ object ComicLib {
     private const val DIR_BOOKS = "books"
     private const val META_FILE = "books.json"
     private const val COVER_WIDTH = 480
+    private const val THUMB_WIDTH = 160
     private const val COPY_BUFFER = 256 * 1024
 
     /** 所有磁盘操作串行化，避免同时导入/删除时互相踩 */
@@ -62,6 +64,13 @@ object ComicLib {
     private var openZip: ZipFile? = null
     private var openNames: List<String> = emptyList()
 
+    /** 页栏缩略图缓存，最多留 40 张 */
+    private val thumbCache = object : LinkedHashMap<String, String>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>): Boolean {
+            return size > 40
+        }
+    }
+
     // ------------------------------------------------------------------
     // 生命周期
     // ------------------------------------------------------------------
@@ -77,7 +86,7 @@ object ComicLib {
             ActivityResultContracts.OpenMultipleDocuments()
         ) { uris ->
             if (!uris.isNullOrEmpty()) {
-                startImport(uris)
+                enqueue(uris)
             }
         }
     }
@@ -94,37 +103,75 @@ object ComicLib {
     // ------------------------------------------------------------------
 
     private fun startImport(uris: List<Uri>) {
-        val ctx = appContext ?: return
-        io.execute {
-            importing = true
-            importPercent = 0
-            val created = JSONArray()
-            for ((index, uri) in uris.withIndex()) {
-                try {
-                    val id = importOne(ctx, uri, index)
-                    if (id != null) created.put(id)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    toast("导入失败：" + (e.message ?: "未知错误"))
-                }
-            }
-            importing = false
-            importPercent = 0
-            importTitle = ""
-            if (created.length() > 0) {
-                notifyImportDone(created.toString())
-            }
-            notifyChanged()
-        }
+        enqueue(uris)
     }
 
-    private fun importOne(ctx: Context, uri: Uri, index: Int): String? {
+    // ------------------------------------------------------------------
+    // 导入队列：一次选很多个也排队处理，队列没清空前 worker 一直跑
+    // ------------------------------------------------------------------
+
+    private val pending = java.util.Collections.synchronizedList(ArrayList<Uri>())
+
+    @Volatile
+    private var workerRunning = false
+
+    @Volatile
+    private var queueDone = 0
+
+    @Volatile
+    private var lastError = ""
+
+    private fun enqueue(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        pending.addAll(uris)
+        if (workerRunning) return
+        workerRunning = true
+        importing = true
+        queueDone = 0
+        lastError = ""
+        io.execute { runWorker() }
+    }
+
+    private fun runWorker() {
+        val ctx = appContext
+        if (ctx == null) {
+            workerRunning = false
+            importing = false
+            return
+        }
+        val created = JSONArray()
+        while (true) {
+            val uri: Uri? = synchronized(pending) {
+                if (pending.isEmpty()) null else pending.removeAt(0)
+            }
+            if (uri == null) break
+            try {
+                val id = importOne(ctx, uri)
+                if (id != null) created.put(id)
+            } catch (e: Exception) {
+                lastError = e.message ?: "导入失败"
+                e.printStackTrace()
+                toast("导入失败：" + (e.message ?: "未知错误"))
+            }
+            queueDone++
+        }
+        importing = false
+        importPercent = 0
+        importTitle = ""
+        workerRunning = false
+        if (created.length() > 0) {
+            notifyImportDone(created.toString())
+        }
+        notifyChanged()
+    }
+
+    private fun importOne(ctx: Context, uri: Uri): String? {
         val rawName = queryName(ctx, uri)
         importTitle = stripExtension(rawName)
         importPercent = 0
 
         var total = querySize(ctx, uri)
-        val id = "b" + System.currentTimeMillis().toString(36) + index.toString(36)
+        val id = "b" + System.currentTimeMillis().toString(36) + queueDone.toString(36)
         val bookDir = File(File(ctx.filesDir, DIR_BOOKS), id)
         if (!bookDir.exists() && !bookDir.mkdirs()) {
             throw IllegalStateException("无法创建目录")
@@ -393,6 +440,9 @@ object ComicLib {
             root.put("importing", importing)
             root.put("importTitle", importTitle)
             root.put("importPercent", importPercent)
+            root.put("queueDone", queueDone)
+            root.put("queueRemaining", pending.size + if (importing) 1 else 0)
+            root.put("lastError", lastError)
             root.toString()
         } catch (e: Exception) {
             "{\"books\":[],\"importing\":false}"
@@ -446,6 +496,48 @@ object ComicLib {
             "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (e: Exception) {
             ""
+        }
+    }
+
+    /** 页栏用的小缩略图（160px 宽 jpg），带内存缓存 */
+    @JavascriptInterface
+    fun getThumb(id: String, index: Int): String {
+        val key = id + "#" + index
+        synchronized(thumbCache) {
+            thumbCache[key]?.let { return it }
+        }
+        synchronized(zipLock) {
+            val zip = ensureOpenLocked(id) ?: return ""
+            if (index < 0 || index >= openNames.size) return ""
+            val entry = zip.getEntry(openNames[index]) ?: return ""
+            val url = try {
+                val bounds = BitmapFactory.Options()
+                bounds.inJustDecodeBounds = true
+                zip.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, bounds) }
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return ""
+                var sample = 1
+                while (bounds.outWidth / (sample * 2) >= THUMB_WIDTH) sample *= 2
+                val opts = BitmapFactory.Options()
+                opts.inSampleSize = sample
+                val bmp = zip.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, opts) }
+                    ?: return ""
+                val scaled = if (bmp.width > THUMB_WIDTH) {
+                    Bitmap.createScaledBitmap(bmp, THUMB_WIDTH, bmp.height * THUMB_WIDTH / bmp.width, true)
+                } else {
+                    bmp
+                }
+                val out = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                if (scaled !== bmp) scaled.recycle()
+                bmp.recycle()
+                "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+            } catch (e: Exception) {
+                ""
+            }
+            if (url.isNotEmpty()) {
+                synchronized(thumbCache) { thumbCache[key] = url }
+            }
+            return url
         }
     }
 
