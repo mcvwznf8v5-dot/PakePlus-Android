@@ -580,6 +580,48 @@ object ComicLib {
         }
     }
 
+    /** 批量删除，idsJson 形如 ["b1","b2"] —— 书架「管理 → 删除」走这个 */
+    @JavascriptInterface
+    fun deleteBooks(idsJson: String) {
+        io.execute {
+            val remove = HashSet<String>()
+            try {
+                val arr = JSONArray(idsJson)
+                for (i in 0 until arr.length()) {
+                    val id = arr.optString(i, "")
+                    if (id.isNotEmpty()) remove.add(id)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                return@execute
+            }
+            if (remove.isEmpty()) return@execute
+
+            synchronized(zipLock) {
+                val open = openId
+                if (open != null && remove.contains(open)) closeOpenLocked()
+            }
+            val ctx = appContext ?: return@execute
+            for (id in remove) {
+                try {
+                    File(File(ctx.filesDir, DIR_BOOKS), id).deleteRecursively()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            synchronized(metaLock) {
+                val array = readBooks()
+                val out = JSONArray()
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i) ?: continue
+                    if (!remove.contains(item.optString("id"))) out.put(item)
+                }
+                writeBooks(out)
+            }
+            notifyChanged()
+        }
+    }
+
     @JavascriptInterface
     fun storageInfo(): String {
         return try {
