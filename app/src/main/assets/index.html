@@ -45,10 +45,26 @@
     position: relative; width: 100%; aspect-ratio: 3 / 4; border-radius: 8px;
     background: #1c1c24; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.4);
   }
-  .cover-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* 图片必须盖住占位图标，否则 📕 会浮在封面上面 */
+  .cover-box img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    position: relative; z-index: 1;
+  }
   .cover-box .ph {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #4a4a55; font-size: 26px;
+    color: #3a3a44; font-size: 22px; z-index: 0;
+  }
+  /* 批量管理 */
+  .card .check {
+    position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.8); background: rgba(0,0,0,.35);
+    display: none; align-items: center; justify-content: center;
+    font-size: 13px; color: #fff; line-height: 1; z-index: 3;
+  }
+  .manage .card .check { display: flex; }
+  .card.sel .check { background: #3b6ef0; border-color: #3b6ef0; }
+  .card.sel .cover-box::after {
+    content: ''; position: absolute; inset: 0; background: rgba(59,110,240,.3); z-index: 2;
   }
   .prog { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.5); }
   .prog i { display: block; height: 100%; background: #3b6ef0; width: 0; }
@@ -151,14 +167,22 @@
 
 <!-- ============ 书架 ============ -->
 <div id="shelfView" class="view">
-  <div class="topbar">
+  <div class="topbar" id="shelfBar">
     <h1>📚 书架</h1><span class="sub" id="shelfSub"></span>
     <span class="spacer"></span>
+    <button class="btn" id="manageBtn">管理</button>
     <select class="btn" id="sortSel">
       <option value="time">按时间</option>
       <option value="name">按名称</option>
     </select>
     <button class="btn primary" id="importBtn">导入</button>
+  </div>
+  <div class="topbar hidden" id="manageBar">
+    <span class="sub" id="selCount">已选 0 本</span>
+    <span class="spacer"></span>
+    <button class="btn" id="selectAllBtn">全选</button>
+    <button class="btn" id="deleteSelBtn">删除</button>
+    <button class="btn" id="doneBtn">完成</button>
   </div>
   <div id="grid"></div>
   <div class="empty" id="emptyBox">
@@ -291,9 +315,11 @@ function toast(msg) {
 }
 
 function fmtSize(bytes) {
-  if (!bytes) return '0M';
+  if (!bytes) return '0K';
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + 'G';
   var mb = bytes / 1048576;
-  return mb >= 1024 ? (mb / 1024).toFixed(1) + 'G' : Math.round(mb) + 'M';
+  if (mb >= 1) return Math.round(mb) + 'M';
+  return Math.max(1, Math.round(bytes / 1024)) + 'K';
 }
 
 /* ================= 书架 ================= */
@@ -324,7 +350,40 @@ function refresh() {
     stopPolling();
   }
 
-  renderShelf();
+  var sig = shelfSignature();
+  if (sig === lastSig) {
+    updateBars();
+  } else {
+    lastSig = sig;
+    renderShelf();
+  }
+}
+
+/* 书架签名：只有书的集合/顺序/管理模式变了才重建 DOM，否则只刷新进度条 */
+var lastSig = '';
+var manageMode = false;
+var selected = new Set();
+
+function shelfSignature() {
+  var list = sortedBooks();
+  var first = list.length ? list[0].id : '-';
+  var last = list.length ? list[list.length - 1].id : '-';
+  return list.length + '|' + sortMode + '|' + first + '|' + last + '|' + (manageMode ? 'm' : 'n');
+}
+
+function updateBars() {
+  var map = {};
+  for (var i = 0; i < books.length; i++) map[books[i].id] = books[i];
+  var cards = grid.querySelectorAll('.card');
+  for (var k = 0; k < cards.length; k++) {
+    var card = cards[k];
+    var book = map[card.dataset.bookId];
+    if (!book) continue;
+    var pages = Math.max(1, book.pages || 1);
+    var read = Math.min(book.lastRead || 0, pages - 1);
+    var bar = card.querySelector('.prog i');
+    if (bar) bar.style.width = (((read + (read > 0 ? 1 : 0)) / pages) * 100) + '%';
+  }
 }
 
 function startPolling() {
@@ -354,6 +413,7 @@ var coverCache = new Map();
 function renderShelf() {
   var list = sortedBooks();
   shelfSub.textContent = list.length ? list.length + ' 本' : '';
+  grid.classList.toggle('manage', manageMode);
   grid.innerHTML = '';
 
   if (!list.length) {
@@ -361,10 +421,16 @@ function renderShelf() {
     emptyText.innerHTML = hasLib
       ? '书架还是空的<br />点右上角「导入」选压缩包'
       : '请在 App 内打开<br />（浏览器里没有原生存储）';
+    updateSelCount();
     return;
   }
   emptyBox.classList.add('hidden');
-  for (var i = 0; i < list.length; i++) grid.appendChild(buildCard(list[i]));
+  for (var i = 0; i < list.length; i++) {
+    var card = buildCard(list[i]);
+    if (selected.has(list[i].id)) card.classList.add('sel');
+    grid.appendChild(card);
+  }
+  updateSelCount();
 }
 
 var observer = ('IntersectionObserver' in window)
@@ -389,6 +455,7 @@ var observer = ('IntersectionObserver' in window)
 function buildCard(book) {
   var card = document.createElement('div');
   card.className = 'card';
+  card.dataset.bookId = book.id;
 
   var box = document.createElement('div');
   box.className = 'cover-box';
@@ -402,6 +469,10 @@ function buildCard(book) {
   img.dataset.id = book.id;
   img.alt = '';
   box.appendChild(img);
+
+  var check = document.createElement('div');
+  check.className = 'check';
+  check.textContent = '✓';
 
   var prog = document.createElement('div');
   prog.className = 'prog';
@@ -421,54 +492,98 @@ function buildCard(book) {
   meta.textContent = (book.pages || 0) + ' 页 · ' + fmtSize(book.size);
 
   card.appendChild(box);
+  card.appendChild(check);
   card.appendChild(title);
   card.appendChild(meta);
 
   if (observer) observer.observe(img);
 
-  var pressTimer = 0;
-  var moved = false;
-  var longPressed = false;
-
-  box.addEventListener('pointerdown', function () {
-    moved = false;
-    longPressed = false;
-    pressTimer = setTimeout(function () {
-      longPressed = true;
-      askDelete(book);
-    }, 650);
-  });
-  box.addEventListener('pointermove', function () { moved = true; clearTimeout(pressTimer); });
-  box.addEventListener('pointerup', function () { clearTimeout(pressTimer); });
-  box.addEventListener('pointercancel', function () { clearTimeout(pressTimer); });
-  box.addEventListener('click', function () {
-    clearTimeout(pressTimer);
-    if (moved || longPressed) { longPressed = false; return; }
+  card.addEventListener('click', function () {
+    if (manageMode) {
+      if (selected.has(book.id)) {
+        selected.delete(book.id);
+        card.classList.remove('sel');
+      } else {
+        selected.add(book.id);
+        card.classList.add('sel');
+      }
+      updateSelCount();
+      return;
+    }
     openBook(book, book.lastRead || 0);
   });
 
   return card;
 }
 
-/* ================= 删除 ================= */
-function askDelete(book) {
-  pendingDelete = book;
-  cfText.textContent = '《' + (book.title || '未命名') + '》会连同 App 里存的压缩包一起删除，无法恢复。';
-  confirmMask.classList.remove('hidden');
+/* ================= 批量管理 / 删除 ================= */
+var manageBtn = document.getElementById('manageBtn');
+var shelfBar = document.getElementById('shelfBar');
+var manageBar = document.getElementById('manageBar');
+var selCountEl = document.getElementById('selCount');
+var selectAllBtn = document.getElementById('selectAllBtn');
+var deleteSelBtn = document.getElementById('deleteSelBtn');
+var doneBtn = document.getElementById('doneBtn');
+var pendingDeleteIds = null;
+
+function updateSelCount() {
+  if (selCountEl) selCountEl.textContent = '已选 ' + selected.size + ' 本';
 }
+
+function setManage(on) {
+  manageMode = on;
+  if (on) selected.clear();
+  shelfBar.classList.toggle('hidden', on);
+  manageBar.classList.toggle('hidden', !on);
+  lastSig = '';
+  renderShelf();
+}
+
+manageBtn.addEventListener('click', function () { setManage(true); });
+doneBtn.addEventListener('click', function () { setManage(false); });
+
+selectAllBtn.addEventListener('click', function () {
+  var list = sortedBooks();
+  if (list.length > 0 && selected.size >= list.length) {
+    selected.clear();
+  } else {
+    selected.clear();
+    for (var i = 0; i < list.length; i++) selected.add(list[i].id);
+  }
+  lastSig = '';
+  renderShelf();
+});
+
+deleteSelBtn.addEventListener('click', function () {
+  if (!selected.size) { toast('先点选要删的书'); return; }
+  pendingDeleteIds = [];
+  selected.forEach(function (id) { pendingDeleteIds.push(id); });
+  cfText.textContent = '将删除选中的 ' + pendingDeleteIds.length +
+    ' 本书，App 里的压缩包一并删掉，无法恢复。';
+  confirmMask.classList.remove('hidden');
+});
+
 cfNo.addEventListener('click', function () {
-  pendingDelete = null;
+  pendingDeleteIds = null;
   confirmMask.classList.add('hidden');
 });
+
 cfYes.addEventListener('click', function () {
-  var book = pendingDelete;
-  pendingDelete = null;
+  var ids = pendingDeleteIds;
+  pendingDeleteIds = null;
   confirmMask.classList.add('hidden');
-  if (!book) return;
-  if (hasLib) Lib.deleteBook(book.id);
-  coverCache.delete(book.id);
-  toast('已删除');
-  setTimeout(refresh, 300);
+  if (!ids || !ids.length) return;
+  if (hasLib) {
+    try { Lib.deleteBooks(JSON.stringify(ids)); } catch (e) { console.warn(e); }
+  }
+  for (var i = 0; i < ids.length; i++) coverCache.delete(ids[i]);
+  selected.clear();
+  manageMode = false;
+  shelfBar.classList.remove('hidden');
+  manageBar.classList.add('hidden');
+  lastSig = '';
+  toast('已删除 ' + ids.length + ' 本');
+  setTimeout(refresh, 400);
 });
 
 /* ================= 阅读器公共 ================= */
@@ -904,6 +1019,7 @@ importBtn.addEventListener('click', function () {
 
 sortSel.addEventListener('change', function () {
   sortMode = sortSel.value;
+  lastSig = '';
   renderShelf();
 });
 
