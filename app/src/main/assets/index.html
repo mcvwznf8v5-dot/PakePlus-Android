@@ -198,6 +198,7 @@
     <div class="title" id="rTitle"></div>
     <div class="info" id="rInfo"></div>
     <button class="btn" id="modeBtn">单页</button>
+    <button class="btn" id="dirBtn">左右</button>
     <button class="btn" id="stripBtn">页栏</button>
   </div>
 
@@ -282,6 +283,7 @@ var prevBtn = document.getElementById('prevBtn');
 var nextBtn = document.getElementById('nextBtn');
 var jumpBtn = document.getElementById('jumpBtn');
 var modeBtn = document.getElementById('modeBtn');
+var dirBtn = document.getElementById('dirBtn');
 var stripBtn = document.getElementById('stripBtn');
 var thumbStrip = document.getElementById('thumbStrip');
 var stripCells = document.getElementById('stripCells');
@@ -665,6 +667,26 @@ modeBtn.addEventListener('click', function () {
   setMode(next, false);
 });
 
+/* ---------- 阅读方向：lr 左右 / ud 上下（只影响单页模式的手势） ---------- */
+var direction = 'lr';
+try {
+  var savedDir = localStorage.getItem('cr_reader_dir');
+  if (savedDir === 'ud' || savedDir === 'lr') direction = savedDir;
+} catch (e) {}
+
+function updateDirLabel() {
+  dirBtn.textContent = direction === 'ud' ? '上下' : '左右';
+}
+
+dirBtn.addEventListener('click', function () {
+  direction = direction === 'ud' ? 'lr' : 'ud';
+  try { localStorage.setItem('cr_reader_dir', direction); } catch (e) {}
+  updateDirLabel();
+  toast(direction === 'ud' ? '上下翻页：上滑下一页，下滑上一页' : '左右翻页：左滑下一页');
+});
+
+updateDirLabel();
+
 function setMode(m, keepPage) {
   var oldMode = mode;
   mode = m;
@@ -672,6 +694,8 @@ function setMode(m, keepPage) {
   doubleWrap.classList.toggle('hidden', m !== 'double');
   scrollWrap.classList.toggle('hidden', m !== 'scroll');
   modeBtn.textContent = m === 'single' ? '单页' : (m === 'double' ? '双页' : '滚动');
+  dirBtn.classList.toggle('hidden', m !== 'single');
+  updateDirLabel();
   if (m === 'scroll') {
     stripOpen = false;
     stripBtn.classList.remove('on');
@@ -1001,12 +1025,25 @@ stage.addEventListener('touchend', function (e) {
   if (mode === 'scroll') return;
   var dx = e.changedTouches[0].screenX - touchStartX;
   var dy = e.changedTouches[0].screenY - touchStartY;
+
+  // 上下方向：只认竖向滑动（上滑 = 下一页）
+  if (direction === 'ud' && mode === 'single') {
+    if (Math.abs(dy) < 45 || Math.abs(dy) < Math.abs(dx)) return;
+    step(dy < 0 ? 1 : -1);
+    return;
+  }
+
   if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy)) return;
   step(dx > 0 ? -1 : 1);
 }, { passive: true });
 
 document.addEventListener('keydown', function (e) {
   if (!readerOpen) return;
+  if (direction === 'ud' && mode === 'single') {
+    if (e.key === 'ArrowUp') step(-1);
+    if (e.key === 'ArrowDown') step(1);
+    return;
+  }
   if (e.key === 'ArrowLeft') step(-1);
   if (e.key === 'ArrowRight') step(1);
 });
