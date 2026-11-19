@@ -96,7 +96,15 @@
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     gap: 4px; overflow: hidden;
   }
-  #singleWrap img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .page-layer {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    overflow: hidden; will-change: transform; backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
+  }
+  .page-layer img {
+    max-width: 100%; max-height: 100%; object-fit: contain; display: block;
+    pointer-events: none; -webkit-user-select: none; user-select: none;
+  }
   #doubleWrap img { max-width: 49%; max-height: 100%; object-fit: contain; display: block; }
   #scrollWrap { position: absolute; inset: 0; }
   #scrollBox {
@@ -203,7 +211,10 @@
   </div>
 
   <div class="stage" id="stage">
-    <div id="singleWrap"><img id="pageImg" alt="" /></div>
+    <div id="singleWrap">
+      <div class="page-layer" id="layerA"><img id="pageImgA" alt="" /></div>
+      <div class="page-layer" id="layerB"><img id="pageImgB" alt="" /></div>
+    </div>
     <div id="doubleWrap" class="hidden"><img id="pageImgL" alt="" /><img id="pageImgR" alt="" /></div>
     <div id="scrollWrap" class="hidden"><div id="scrollBox"></div></div>
   </div>
@@ -273,7 +284,13 @@ var singleWrap = document.getElementById('singleWrap');
 var doubleWrap = document.getElementById('doubleWrap');
 var scrollWrap = document.getElementById('scrollWrap');
 var scrollBox = document.getElementById('scrollBox');
-var pageImg = document.getElementById('pageImg');
+var pageImgA = document.getElementById('pageImgA');
+var pageImgB = document.getElementById('pageImgB');
+var pageImg = pageImgA;                 // 兼容旧引用
+var layerAEl = document.getElementById('layerA');
+var layerBEl = document.getElementById('layerB');
+var layers = [{ el: layerAEl, img: pageImgA }, { el: layerBEl, img: pageImgB }];
+var activeLayer = 0;
 var pageImgL = document.getElementById('pageImgL');
 var pageImgR = document.getElementById('pageImgR');
 var slider = document.getElementById('slider');
@@ -607,7 +624,7 @@ function pageUrl(index) {
   try { url = Lib.getPage(currentBook.id, index) || ''; } catch (e) { url = ''; }
   if (url) {
     pageCache.set(key, url);
-    if (pageCache.size > 8) {
+    if (pageCache.size > 12) {
       var firstKey = pageCache.keys().next().value;
       pageCache.delete(firstKey);
     }
@@ -646,9 +663,11 @@ function closeReader(fromPop) {
   if (scrollObserver) scrollObserver.disconnect();
   scrollBox.innerHTML = '';
   scrollSlots = [];
-  pageImg.removeAttribute('src');
+  pageImgA.removeAttribute('src');
+  pageImgB.removeAttribute('src');
   pageImgL.removeAttribute('src');
   pageImgR.removeAttribute('src');
+  warmCache = [];
   pageCache = new Map();
   currentBook = null;
   if (!fromPop) {
@@ -729,9 +748,7 @@ function showPage(index, immediate) {
     if (right) { pageImgR.classList.remove('hidden'); pageImgR.src = right; }
     else pageImgR.classList.add('hidden');
   } else {
-    var url = pageUrl(index);
-    if (immediate) pageImg.removeAttribute('src');
-    if (url) pageImg.src = url; else toast('这一页读取失败');
+    showSingle(index, immediate);
   }
 
   updateFoot();
@@ -740,14 +757,60 @@ function showPage(index, immediate) {
   if (stripOpen) renderStrip();
 }
 
+/* ---------- 单页显示：双层 + 跟手拖动 ---------- */
+var warmCache = [];
+
+function stageH() {
+  var h = stage.clientHeight;
+  return h > 100 ? h : 400;
+}
+
+function resetLayers() {
+  var h = stageH();
+  layers[activeLayer].el.style.transition = '';
+  layers[1 - activeLayer].el.style.transition = '';
+  layers[activeLayer].el.style.transform = 'translate3d(0,0,0)';
+  layers[1 - activeLayer].el.style.transform = 'translate3d(0,' + h + 'px,0)';
+}
+
+function showSingle(index, immediate) {
+  var url = pageUrl(index);
+  if (!url) { toast('这一页读取失败'); return; }
+  layers[activeLayer].img.src = url;
+  resetLayers();
+  warm(index + 1);
+  warm(index - 1);
+}
+
+/* 预解码：先把 data URL 塞进一个隐藏 Image，翻页时不用再等解码 */
+function warm(index) {
+  if (!currentBook || index < 0 || index >= totalPages()) return;
+  var url = pageUrl(index);
+  if (!url) return;
+  var im = new Image();
+  im.src = url;
+  warmCache.push(im);
+  if (warmCache.length > 4) warmCache.shift();
+}
+
+/* 只更新页码/进度，不动 DOM 层（拖动提交后调用） */
+function setPageState(index) {
+  currentPage = index;
+  updateFoot();
+  scheduleSave();
+  preloadNeighbours(index);
+  if (stripOpen) renderStrip();
+}
+
 function preloadNeighbours(index) {
   clearTimeout(window.__preloadTimer);
+  if (!currentBook) return;
+  warm(index + 1);
   window.__preloadTimer = setTimeout(function () {
     if (!currentBook) return;
-    pageUrl(index + 1);
-    pageUrl(index + 2);
-    pageUrl(index - 1);
-  }, 220);
+    warm(index + 2);
+    warm(index - 1);
+  }, 150);
 }
 
 function updateFoot() {
@@ -1016,17 +1079,84 @@ function flushProgress() {
 var touchStartX = 0;
 var touchStartY = 0;
 
+var drag = { active: false, dy: 0, dir: 0, prepared: -999, moved: false, lastT: 0, lastDy: 0, vy: 0 };
+
+function dragEnabled() {
+  return mode === 'single' && direction === 'ud' && readerOpen && !!currentBook;
+}
+
 stage.addEventListener('touchstart', function (e) {
   touchStartX = e.changedTouches[0].screenX;
   touchStartY = e.changedTouches[0].screenY;
+  if (!dragEnabled()) return;
+  drag.active = true;
+  drag.dy = 0;
+  drag.dir = 0;
+  drag.prepared = -999;
+  drag.moved = false;
+  drag.lastT = 0;
+  drag.lastDy = 0;
+  drag.vy = 0;
+  resetLayers();
+}, { passive: true });
+
+stage.addEventListener('touchmove', function (e) {
+  if (!drag.active) return;
+  var dy = e.changedTouches[0].screenY - touchStartY;
+  var dx = e.changedTouches[0].screenX - touchStartX;
+
+  if (!drag.moved) {
+    if (Math.abs(dy) < 6 && Math.abs(dx) < 6) return;
+    if (Math.abs(dx) > Math.abs(dy)) { drag.active = false; return; }  // 横向滑动不接管
+    drag.moved = true;
+  }
+
+  var h = stageH();
+  if (dy > h) dy = h;
+  if (dy < -h) dy = -h;
+
+  var dir = dy < 0 ? 1 : -1;      // 上滑 = 下一页
+  var target = currentPage + dir;
+  var has = target >= 0 && target < totalPages();
+
+  if (!has) {
+    dy = dy * 0.25;               // 已经是头/尾，给个阻尼
+  } else if (drag.prepared !== target) {
+    layers[1 - activeLayer].img.src = pageUrl(target) || '';
+    drag.prepared = target;
+  }
+
+  drag.dy = dy;
+  drag.dir = dir;
+
+  // 记录速度，松手时判断是「轻甩」还是「慢慢拖又退回」
+  var now = Date.now();
+  if (drag.lastT > 0) {
+    var dt = now - drag.lastT;
+    if (dt > 0) drag.vy = (dy - drag.lastDy) / dt;
+  }
+  drag.lastT = now;
+  drag.lastDy = dy;
+
+  layers[activeLayer].el.style.transform = 'translate3d(0,' + dy + 'px,0)';
+  layers[1 - activeLayer].el.style.transform =
+    'translate3d(0,' + (dy + (dir === 1 ? h : -h)) + 'px,0)';
 }, { passive: true });
 
 stage.addEventListener('touchend', function (e) {
   if (mode === 'scroll') return;
+
+  if (drag.active && drag.moved) {
+    drag.active = false;
+    finishDrag();
+    return;
+  }
+  drag.active = false;
+
   var dx = e.changedTouches[0].screenX - touchStartX;
   var dy = e.changedTouches[0].screenY - touchStartY;
 
-  // 上下方向：只认竖向滑动（上滑 = 下一页）
+  // 上下方向、单页：没触发跟手拖动（快速一划）也照样翻页
   if (direction === 'ud' && mode === 'single') {
     if (Math.abs(dy) < 45 || Math.abs(dy) < Math.abs(dx)) return;
     step(dy < 0 ? 1 : -1);
@@ -1036,6 +1166,46 @@ stage.addEventListener('touchend', function (e) {
   if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy)) return;
   step(dx > 0 ? -1 : 1);
 }, { passive: true });
+
+/* 松手：超过 14% 屏高就翻过去，否则弹回 */
+function finishDrag() {
+  var h = stageH();
+  var dir = drag.dir;
+  var dy = drag.dy;
+  var target = currentPage + dir;
+  var has = dir !== 0 && target >= 0 && target < totalPages();
+  var commit = has && (Math.abs(dy) > h * 0.14 || Math.abs(drag.vy) > 0.7);
+
+  var cur = layers[activeLayer];
+  var inc = layers[1 - activeLayer];
+  var ease = 'transform .22s cubic-bezier(.22,.61,.36,1)';
+  cur.el.style.transition = ease;
+  inc.el.style.transition = ease;
+
+  if (!has) {
+    cur.el.style.transform = 'translate3d(0,0,0)';
+    inc.el.style.transform = 'translate3d(0,' + h + 'px,0)';
+    setTimeout(resetLayers, 260);
+    return;
+  }
+
+  if (commit) {
+    cur.el.style.transform = 'translate3d(0,' + (dir === 1 ? -h : h) + 'px,0)';
+    inc.el.style.transform = 'translate3d(0,0,0)';
+    activeLayer = 1 - activeLayer;
+    setPageState(target);
+  } else {
+    cur.el.style.transform = 'translate3d(0,0,0)';
+    inc.el.style.transform = 'translate3d(0,' + (dir === 1 ? h : -h) + 'px,0)';
+  }
+
+  setTimeout(function () {
+    if (mode !== 'single') return;
+    resetLayers();
+    warm(currentPage + 1);
+    warm(currentPage - 1);
+  }, 260);
+}
 
 document.addEventListener('keydown', function (e) {
   if (!readerOpen) return;
